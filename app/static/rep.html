@@ -1,0 +1,24 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer"><title>Rep console · CHS Practice Discovery</title><link rel="stylesheet" href="/static/style.css"></head>
+<body>
+<header class="topbar"><div class="topbar-inner wide"><div class="brand"><div class="brand-mark">CHS</div><div>Practice Discovery<small>Rep console</small></div></div><button class="btn btn-ghost btn-small save-state hidden" id="logout" type="button">Sign out</button></div></header>
+<main class="wide" id="app">
+<div class="card" id="login"><div class="emoji">🔐</div><h1>Team sign-in</h1><p class="lead">For Continuant Healthcare Solutions staff only.</p>
+<form id="login-form"><div class="field"><label for="pw">Password</label><input type="password" id="pw" autocomplete="current-password" required></div><button class="btn btn-primary" type="submit">Sign in</button><div class="msg bad" id="login-msg"></div></form></div>
+<div id="dash" class="hidden">
+ <div class="card"><p class="eyebrow">New invite</p><h1>Send a prospect their discovery link</h1>
+  <form id="invite-form">
+   <div class="row"><div class="field"><label for="i-pn">Prospect name *</label><input id="i-pn" type="text" required placeholder="e.g. Dr. Jane Smith"></div><div class="field"><label for="i-pe">Prospect email</label><input id="i-pe" type="email" placeholder="jane@practice.com"></div></div>
+   <div class="row"><div class="field"><label for="i-pr">Practice name</label><input id="i-pr" type="text" placeholder="e.g. Smith Family Psychiatry"></div><div class="field"><label for="i-days">Link expires after</label><select id="i-days"><option value="14">14 days</option><option value="30" selected>30 days</option><option value="60">60 days</option><option value="90">90 days</option></select></div></div>
+   <div class="row"><div class="field"><label for="i-rn">Your name (shown to the prospect) *</label><input id="i-rn" type="text" required></div><div class="field"><label for="i-re">Your email</label><input id="i-re" type="email"></div></div>
+   <label class="muted"><input type="checkbox" id="i-test"> Mark as a test invite</label>
+   <div class="mt"><button class="btn btn-primary" type="submit">Create secure link</button></div>
+  </form>
+  <div id="new-result" class="hidden mt"></div>
+ </div>
+ <div class="card mt"><div class="toolbar"><h2 class="grow">Invites</h2><span class="spacer"></span><a class="btn btn-ghost btn-small" href="/api/rep/export.csv">Export all (CSV)</a><a class="btn btn-ghost btn-small" href="/api/rep/export.json">Export all (JSON)</a><button class="btn btn-ghost btn-small" id="refresh" type="button">Refresh</button></div>
+  <div id="list"></div></div>
+ <div class="card mt hidden" id="detail"></div>
+</div>
+</main>
+<script src="/static/rep.js"></script>
+</body></html>

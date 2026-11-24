@@ -1,0 +1,9 @@
+.secrets/
+.venv/
+var/
+data/raw/
+__pycache__/
+*.pyc
+screenshots-review/
+.env
+var.log
