@@ -9,7 +9,8 @@
 
   const STEPS = [
     { id: "welcome", name: "Welcome" },
-    { id: "states", name: "Where you practice" },
+    { id: "clinic", name: "Your clinic" },
+    { id: "lookup", name: "Find your NPI records" },
     { id: "payers", name: "Insurance payers" },
     { id: "practice", name: "Practice details" },
     { id: "specialty", name: "Specialty & setup" },
@@ -102,7 +103,15 @@
   }
 
   // ----------------------------------------------------------------- UI builders
+  const expanded = {};
+  const isPrefilled = (path) => !!(A.prefill && A.prefill[path]);
+  function showVal(v) { if (v && typeof v === "object" && !Array.isArray(v)) return [v.street, v.city, v.state, v.zip].filter(Boolean).join(", "); return Array.isArray(v) ? v.join(", ") : v; }
   function field(path, label, input, opts = {}) {
+    const val = showVal(get(path));
+    if (opts.prefill !== false && isPrefilled(path) && val && !expanded[path]) {
+      return `<div class="field prefilled" data-field="${path}"><div class="field-head"><label>${label}</label><button type="button" class="btn btn-ghost btn-small" data-action="edit-prefill" data-path="${path}">Edit</button></div>
+        <div class="prefill-val">${esc(val)} <span class="badge badge-ok">${A.prefill[path] === "you" ? "From step 1" : "From NPI registry"}</span></div></div>`;
+    }
     const u = opts.unsure !== false && isUnsure(path);
     return `<div class="field" data-field="${path}">
       <div class="field-head"><label for="${fid(path)}">${label}</label>${opts.unsure === false ? "" : `<button type="button" class="unsure-toggle" data-unsure="${path}" aria-pressed="${u}">${u ? "✓ Not sure" : "Not sure"}</button>`}</div>
@@ -128,25 +137,146 @@
   R.welcome = () => {
     const fn = INV.first_name ? `, ${esc(INV.first_name)}` : "";
     const back = INV.status === "in_progress" && step === 0 && (INV.current_step || 0) > 0;
-    return `${head("👋", "Hi" + fn + "!", "Let's map out your practice together", `${esc(INV.rep_name)} at Continuant Healthcare Solutions put together this quick, guided checklist so we can prepare an accurate credentialing and billing quote${INV.practice_name ? ` for <strong>${esc(INV.practice_name)}</strong>` : ""}.`)}
-      <div class="choice-grid">
-        <div class="choice"><span class="ico">⏱️</span><span>About 5 minutes<small>One topic per screen</small></span></div>
-        <div class="choice"><span class="ico">🤷</span><span>Nothing is required<small>Tap “Not sure” and keep going</small></span></div>
-        <div class="choice"><span class="ico">💾</span><span>Saves as you go<small>Come back any time with the same link</small></span></div>
-      </div>
+    return `${head("👋", "Hi" + fn + "!", "Let's map out your practice together", `${esc(INV.rep_name)} at Continuant Healthcare Solutions put together this quick, guided checklist so we can prepare an accurate credentialing and billing quote. First, who are we talking to?`)}
+      <div class="row">${field("contact.name", "Your name", text("contact.name", { auto: "name", ph: "First and last name" }), { unsure: false, prefill: false })}${field("contact.email", "Your email", text("contact.email", { type: "email", auto: "email", mode: "email", ph: "you@practice.com" }), { unsure: false, prefill: false })}</div>
+      <p class="fun-fact">⏱️ About 5 minutes · 🤷 Nothing is required, tap “Not sure” any time · 💾 Saves as you go</p>
       <div class="callout privacy"><strong>Your privacy:</strong> this is a private link made just for you, sent over an encrypted (HTTPS) connection. We only ask about your practice, never about patients, so please don't enter any patient information. Your answers are seen only by the CHS team preparing your quote, and your tax ID is stored encrypted.</div>
       <div class="mt"><button class="btn btn-primary" data-action="start" type="button">${back ? "Pick up where I left off" : "Let's go"} →</button>${back ? ` <button class="btn-link" data-action="restart" type="button">Start from the beginning</button>` : ""}</div>`;
   };
 
-  R.states = () => {
+  R.clinic = () => {
     const sel = A.states || [];
     const names = LISTS.states;
-    return `${head("🗺️", "Step 1", "Where do you practice?", "Pick every state where you see patients, including telehealth. We'll use this to show the insurance plans available to you.")}
+    return `${head("🏥", "Step 1", "Tell us about your clinic", "Your clinic's name and every state where you see patients, including telehealth. We'll use these to look you up and show the insurance plans available to you.")}
+      ${field("practice.clinic_name", "Clinic or practice name", text("practice.clinic_name", { ph: "e.g. Sunrise Family Medicine", auto: "organization" }), { prefill: false, hint: "Don't have a name yet? Tap “Not sure”." })}
+      <h2>Where do you practice?</h2>
       <div class="field"><input type="search" id="state-filter" placeholder="Type to filter states…" aria-label="Filter states"></div>
       <div class="state-grid" id="state-grid">${Object.entries(names).map(([k, n]) => `<button type="button" class="chip" data-state="${k}" aria-pressed="${sel.includes(k)}">${esc(n)}</button>`).join("")}</div>
       <div class="chips mt"><button type="button" class="chip unsure" data-action="states-unsure" aria-pressed="${!!A.states_unsure}">🤔 Not sure yet / still deciding</button></div>
       <p class="fun-fact" id="state-summary">${sel.length ? `Selected: ${sel.map((s) => esc(names[s])).join(", ")}` : "Tip: you can choose more than one."}</p>`;
   };
+
+  // ---- NPI registry lookup (CMS NPPES, searched server-side)
+  const LK = { organization: { res: [], loading: false, err: "", searched: false }, individual: { res: [], loading: false, err: "", searched: false } };
+  const lkSel = () => { A.lookup = A.lookup || {}; A.lookup.selected = A.lookup.selected || []; return A.lookup.selected; };
+  const isSel = (npi) => lkSel().some((r) => r.npi === npi);
+  function nameParts() {
+    const w = (A.contact?.name || "").replace(/\(.*?\)/g, " ").trim().replace(/^(dr\.?|mr\.?|mrs\.?|ms\.?)\s+/i, "").replace(/,.*$/, "").trim().split(/\s+/).filter(Boolean);
+    return { first: w.length > 1 ? w[0] : "", last: w.length ? w[w.length - 1] : "" };
+  }
+  function npiCard(r, kind) {
+    const on = isSel(r.npi);
+    const ad = r.address || {};
+    return `<div class="npi-card${on ? " on" : ""}"><div class="npi-top"><div><div class="payer-name">${esc(r.name)}${r.credential ? `, ${esc(r.credential)}` : ""}</div>
+      <div class="payer-note">NPI ${esc(r.npi)}${r.status && r.status !== "A" ? " · inactive" : ""}</div></div>
+      <button type="button" class="chip" data-npisel="${esc(r.npi)}" data-kind="${kind}" aria-pressed="${on}">${on ? "✓ That's us" : kind === "organization" ? "This is our clinic" : "This is ours"}</button></div>
+      <dl class="kv npi-kv"><dt>Address</dt><dd>${esc([ad.street, ad.city, ad.state, ad.zip].filter(Boolean).join(", ") || "–")}</dd>
+      <dt>Specialty</dt><dd>${esc(r.taxonomy || "–")}</dd><dt>Phone</dt><dd>${esc(r.phone || "–")}</dd>${r.other_names && r.other_names.length ? `<dt>Also known as</dt><dd>${esc(r.other_names.join(", "))}</dd>` : ""}</dl></div>`;
+  }
+  function lkSection(kind) {
+    const st = LK[kind];
+    const none = !!A.lookup?.["none_" + kind];
+    const chosen = lkSel().filter((r) => r.type === kind);
+    const shown = st.res.filter((r) => !isSel(r.npi));
+    let body = "";
+    if (st.loading) body = `<p class="muted">Searching the NPI registry…</p>`;
+    else if (st.err) body = `<div class="warnings">${esc(st.err)}</div>`;
+    else if (st.searched && !st.res.length) body = `<div class="callout">No matches${(A.states || []).length ? " in " + esc((A.states || []).join(", ")) : ""}. Try a shorter name, ${(A.states || []).length ? `<button class="btn-link" type="button" data-action="lk-allstates" data-kind="${kind}">search all states</button>, ` : ""}or skip this. Totally fine if you don't have an NPI yet.</div>`;
+    else if (shown.length) body = `<p class="fun-fact">${shown.length} possible match${shown.length === 1 ? "" : "es"}. Pick any that belong to you.</p>` + shown.map((r) => npiCard(r, kind)).join("");
+    return `${chosen.length ? `<h3 class="mt">Selected</h3>${chosen.map((r) => npiCard(r, kind)).join("")}` : ""}${body}
+      <div class="chips mt"><button type="button" class="chip unsure" data-action="lk-none" data-kind="${kind}" aria-pressed="${none}">${kind === "organization" ? "🙅 None of these / no clinic NPI yet" : "🙅 None of these / no NPI yet"}</button></div>`;
+  }
+  R.lookup = () => {
+    const np = nameParts();
+    A.lookup = A.lookup || {};
+    const key = (A.practice?.clinic_name || "") + "|" + (A.states || []).join(",");
+    if (A.lookup.key !== key) {
+      if (A.lookup.key !== undefined) { A.lookup.org_q = A.practice?.clinic_name || ""; }
+      A.lookup.key = key; LK.organization.searched = false; LK.individual.searched = false; LK.organization.res = []; LK.individual.res = [];
+    }
+    const q = A.lookup;
+    if (!LK.organization.searched && !LK.organization.loading && (q.org_q || A.practice?.clinic_name)) setTimeout(() => runLookup("organization"), 0);
+    if (!LK.individual.searched && !LK.individual.loading && (q.last_q || np.last)) setTimeout(() => runLookup("individual"), 0);
+    return `${head("🔎", "Step 2", "Let's find you in the NPI registry", "We searched the public CMS NPI Registry for your clinic and providers. Tap the records that belong to you and we'll fill in the details for you. You can change anything later. (Tax IDs aren't public, so we'll ask for that separately.)")}
+      <section class="group"><div class="group-head">🏢 Your clinic <span class="count">Type 2 / group NPI</span></div><div class="group-body">
+        <div class="lk-search"><input type="search" id="lk-org" value="${esc(q.org_q ?? A.practice?.clinic_name ?? "")}" placeholder="Clinic name" aria-label="Clinic name"><button type="button" class="btn btn-teal btn-small" data-action="lk-search" data-kind="organization">Search</button></div>
+        <div id="lk-organization">${lkSection("organization")}</div></div></section>
+      <section class="group"><div class="group-head">🧑‍⚕️ Your providers <span class="count">Type 1 / individual NPI</span></div><div class="group-body">
+        <p class="payer-note">Search one provider at a time. Add as many as you like.</p>
+        <div class="lk-search"><input type="search" id="lk-first" value="${esc(q.first_q ?? np.first)}" placeholder="First name" aria-label="Provider first name"><input type="search" id="lk-last" value="${esc(q.last_q ?? np.last)}" placeholder="Last name" aria-label="Provider last name"><button type="button" class="btn btn-teal btn-small" data-action="lk-search" data-kind="individual">Search</button></div>
+        <div id="lk-individual">${lkSection("individual")}</div></div></section>
+      <p class="fun-fact">Source: CMS NPPES NPI Registry (public). Searching ${(A.states || []).length ? esc((A.states || []).map((x) => LISTS.states[x]).join(", ")) : "all states"}.</p>`;
+  };
+  async function runLookup(kind, allStates = false) {
+    const st = LK[kind];
+    A.lookup = A.lookup || {};
+    let qs;
+    if (kind === "organization") {
+      const org = ($("#lk-org")?.value ?? A.lookup.org_q ?? A.practice?.clinic_name ?? "").trim();
+      A.lookup.org_q = org;
+      if (org.length < 2) { st.err = "Type at least 2 letters of the clinic name."; st.searched = false; return paintLk(kind); }
+      qs = `kind=organization&org=${encodeURIComponent(org)}`;
+    } else {
+      const np = nameParts();
+      const first = ($("#lk-first")?.value ?? A.lookup.first_q ?? np.first).trim();
+      const last = ($("#lk-last")?.value ?? A.lookup.last_q ?? np.last).trim();
+      A.lookup.first_q = first; A.lookup.last_q = last;
+      if (last.length < 2) { st.err = "Type the provider's last name to search."; st.searched = false; return paintLk(kind); }
+      qs = `kind=individual&first=${encodeURIComponent(first)}&last=${encodeURIComponent(last)}`;
+    }
+    const states = allStates ? "" : (A.states || []).join(",");
+    st.loading = true; st.err = ""; paintLk(kind);
+    try { const r = await api("GET", `/npi-search?${qs}&states=${encodeURIComponent(states)}`); st.res = r.results; }
+    catch (e) { st.err = e.message; st.res = []; }
+    st.loading = false; st.searched = true; queueSave(); paintLk(kind);
+  }
+  function paintLk(kind) { const el = $("#lk-" + kind); if (el && STEPS[step].id === "lookup") el.innerHTML = lkSection(kind); }
+
+  function addSpecialty(t) { if (!t) return; A.specialty = A.specialty || {}; A.specialty.specialties = A.specialty.specialties || []; if (!A.specialty.specialties.includes(t)) A.specialty.specialties.push(t); }
+  function prefillSet(path, val, npi) {
+    const cur = get(path);
+    const empty = cur == null || cur === "" || (typeof cur === "object" && !Object.values(cur).some(Boolean));
+    if (!val || (typeof val === "object" && !Object.values(val).some(Boolean)) || !empty) return;
+    set(path, typeof val === "object" ? { ...val } : val);
+    A.prefill = A.prefill || {}; A.prefill[path] = npi;
+  }
+  function credMatch(c) { const u = (c || "").toUpperCase().replace(/[^A-Z]/g, ""); return CREDENTIALS.find((x) => x.toUpperCase().replace(/[^A-Z]/g, "") === u) || (c || ""); }
+  function applyRecord(r, on) {
+    A.prefill = A.prefill || {};
+    if (on) {
+      if (r.type === "organization") {
+        prefillSet("practice.group_npi", r.npi, r.npi);
+        prefillSet("practice.legal_name", r.name, r.npi);
+        if (r.other_names && r.other_names[0]) prefillSet("practice.dba", r.other_names[0], r.npi);
+      } else {
+        const pv = ensureProviders();
+        if (!pv.list.some((p) => p.npi === r.npi)) {
+          const blank = pv.list.findIndex((p) => !p.name && !p.npi);
+          const row = { name: r.name, credential: credMatch(r.credential), npi: r.npi, from_registry: r.npi };
+          if (blank >= 0) pv.list[blank] = { ...pv.list[blank], ...row }; else pv.list.push(row);
+        }
+        pv.count = Math.max(pv.count || 0, pv.list.filter((p) => p.name || p.npi).length);
+      }
+      prefillSet("practice.address", r.address, r.npi);
+      prefillSet("practice.phone", r.phone, r.npi);
+      if (r.taxonomy) { addSpecialty(r.taxonomy); A.prefill["specialty.specialties"] = A.prefill["specialty.specialties"] || r.npi; }
+    } else {
+      Object.entries(A.prefill).forEach(([path, src]) => { if (src === r.npi) { if (path !== "specialty.specialties") set(path, path === "practice.address" ? {} : ""); delete A.prefill[path]; } });
+      if (r.type === "individual") { const pv = ensureProviders(); pv.list = pv.list.filter((p) => p.from_registry !== r.npi); pv.count = pv.list.length || pv.count; }
+      if (r.taxonomy && A.specialty?.specialties && !lkSel().some((x) => x.npi !== r.npi && x.taxonomy === r.taxonomy)) A.specialty.specialties = A.specialty.specialties.filter((t) => t !== r.taxonomy);
+    }
+  }
+  function toggleRecord(npi, kind) {
+    const sel = lkSel();
+    const i = sel.findIndex((r) => r.npi === npi);
+    if (i >= 0) { applyRecord(sel[i], false); sel.splice(i, 1); }
+    else {
+      const r = LK[kind].res.find((x) => x.npi === npi); if (!r) return;
+      sel.push(r); applyRecord(r, true); A.lookup["none_" + kind] = false;
+      toast(kind === "organization" ? "Got it! We'll fill in your clinic details 🎯" : `Added ${r.name} 🙌`);
+    }
+    queueSave(); paintLk(kind);
+  }
 
   function selectedPayers() { A.payers = A.payers || {}; A.payers.selected = A.payers.selected || {}; return A.payers.selected; }
 
@@ -155,7 +285,7 @@
     const sel = selectedPayers();
     let body;
     if (!sts.length) {
-      body = `<div class="callout">You haven't picked a state yet, which is totally fine. <button class="btn-link" data-goto="states" type="button">Pick a state</button> to see a tailored list, or just tell us below which plans you're thinking about.</div>`;
+      body = `<div class="callout">You haven't picked a state yet, which is totally fine. <button class="btn-link" data-goto="clinic" type="button">Pick a state</button> to see a tailored list, or just tell us below which plans you're thinking about.</div>`;
     } else if (!payerData || payerKey !== sts.join(",")) {
       body = `<p class="muted">Finding the insurance plans for ${esc(sts.map((s) => LISTS.states[s]).join(", "))}…</p>`;
       loadPayers(sts);
@@ -172,7 +302,7 @@
       const mac = Object.entries(payerData.states).map(([s, i]) => `${esc(i.name)}: Medicare Part B is handled by ${esc(i.mac.contractor)} (Jurisdiction ${esc(i.mac.jurisdiction)})`).join(" · ");
       body = `<p class="fun-fact">${mac}</p>` + body;
     }
-    return `${head("🏥", "Step 2", "Which insurance plans do you want to accept?", "Check all that apply. If you're already in network with a plan, let us know so we don't redo work.")}
+    return `${head("💼", "Step 3", "Which insurance plans do you want to accept?", "Check all that apply. If you're already in network with a plan, let us know so we don't redo work.")}
       <div class="chips"><button type="button" class="chip unsure" data-action="payers-unsure" aria-pressed="${!!A.payers?.unsure}">🤔 Not sure which plans yet</button></div>
       <div id="payer-list">${body}</div>
       <h2>Don't see one?</h2>
@@ -204,13 +334,15 @@
       : `<input id="${fid("practice.tin")}" type="text" inputmode="numeric" autocomplete="off" data-tin placeholder="12-3456789" maxlength="10"${isUnsure("practice.tin") ? " disabled" : ""}>`;
     const stOpts = `<option value="">State</option>` + Object.entries(LISTS.states).map(([k]) => `<option value="${k}"${get("practice.address.state") === k ? " selected" : ""}>${k}</option>`).join("");
     const addrDis = isUnsure("practice.address") ? " disabled" : "";
-    return `${head("🏢", "Step 3", "Tell us about the practice", "These help us prepare enrollment paperwork. Skip anything you don't have handy.")}
+    const anyPre = Object.keys(A.prefill || {}).some((k) => k.startsWith("practice.") && A.prefill[k] !== "you");
+    return `${head("🏢", "Step 4", "A few practice details", anyPre ? "We filled in what we found in the NPI registry. Tap Edit if anything has changed. The tax ID isn't public, so add it if you have it handy." : "These help us prepare enrollment paperwork. Skip anything you don't have handy.")}
       ${field("practice.legal_name", "Legal group name", text("practice.legal_name", { ph: "As registered with the IRS", auto: "organization" }))}
       ${field("practice.dba", "Doing business as (DBA)", text("practice.dba", { ph: "If different from the legal name" }))}
       <div class="row">
         ${field("practice.tin", "Tax ID (TIN / EIN)", tinInput, { hint: "9 digits. Stored encrypted and masked for our team." })}
         ${field("practice.group_npi", "Group NPI (Type 2)", `<input id="${fid("practice.group_npi")}" type="text" inputmode="numeric" maxlength="10" data-npi="practice.group_npi" value="${esc(p.group_npi || "")}" placeholder="10 digits"${isUnsure("practice.group_npi") ? " disabled" : ""}>`, { hint: "Optional. Don't have one yet? We can help." })}
       </div>
+      ${field("practice.phone", "Practice phone", text("practice.phone", { type: "tel", auto: "tel", mode: "tel", ph: "(555) 555-1234" }))}
       ${field("practice.address", "Practice address", `<input type="text" id="${fid("practice.address")}" data-bind="practice.address.street" value="${esc(get("practice.address.street") || "")}" placeholder="Street address" autocomplete="street-address"${addrDis}>
         <div class="row-3 mt"><input type="text" data-bind="practice.address.city" value="${esc(get("practice.address.city") || "")}" placeholder="City" autocomplete="address-level2" aria-label="City"${addrDis}><select data-bind="practice.address.state" aria-label="State"${addrDis}>${stOpts}</select><input type="text" data-bind="practice.address.zip" value="${esc(get("practice.address.zip") || "")}" placeholder="ZIP" inputmode="numeric" maxlength="10" autocomplete="postal-code" aria-label="ZIP"${addrDis}></div>`, { hint: "Where patients are seen. Telehealth only? Use your business address." })}`;
   };
@@ -218,7 +350,7 @@
   R.specialty = () => {
     const tags = A.specialty?.specialties || [];
     const su = isUnsure("specialty.specialties");
-    return `${head("🩺", "Step 4", "What kind of care do you provide?", "Start typing a specialty. Pick from the list or add your own words.")}
+    return `${head("🩺", "Step 5", "What kind of care do you provide?", "Start typing a specialty. Pick from the list or add your own words.")}
       ${field("specialty.specialties", "Specialty", `<div class="searchbox"><input type="search" id="spec-q" placeholder="e.g. Psychiatry, Family Medicine, Physical Therapy" autocomplete="off"${su ? " disabled" : ""}><div class="suggest hidden" id="spec-suggest"></div></div>
         <div class="tags">${tags.map((t, i) => `<span class="tag">${esc(t)}<button type="button" data-action="rm-spec" data-i="${i}" aria-label="Remove ${esc(t)}">✕</button></span>`).join("")}</div>`)}
       <h2>Is this a new or established practice?</h2>
@@ -233,23 +365,24 @@
   R.providers = () => {
     const pv = ensureProviders();
     const cu = isUnsure("providers.count");
-    return `${head("🧑‍⚕️", "Step 5", "Who will be seeing patients?", "Just names and credentials for now. No Social Security numbers or birthdates needed.")}
+    const fromReg = pv.list.some((p) => p.from_registry);
+    return `${head("🧑‍⚕️", "Step 6", "Who will be seeing patients?", fromReg ? "We added the providers you picked from the NPI registry. Edit anything that's changed and add anyone else. No Social Security numbers or birthdates needed." : "Just names and credentials for now. No Social Security numbers or birthdates needed.")}
       ${field("providers.count", "How many providers need credentialing?", `<div class="stepper"><button type="button" data-action="count-dec" aria-label="Fewer"${cu ? " disabled" : ""}>−</button><output id="${fid("providers.count")}">${pv.count ?? "–"}</output><button type="button" data-action="count-inc" aria-label="More"${cu ? " disabled" : ""}>+</button></div>`, { hint: "Include any you plan to hire soon." })}
       <div id="prov-list">${pv.list.map((p, i) => provRow(p, i)).join("")}</div>
       <button type="button" class="btn btn-ghost" data-action="add-prov">＋ Add a provider</button>`;
   };
   function provRow(p, i) {
     const ini = (p.name || "").split(/\s+/).filter(Boolean).map((w) => w[0]).slice(0, 2).join("").toUpperCase() || i + 1;
-    return `<div class="prov"><div class="prov-head"><div class="avatar">${esc(ini)}</div><strong>Provider ${i + 1}</strong><button type="button" class="btn-link prov-remove" data-action="rm-prov" data-i="${i}">Remove</button></div>
+    return `<div class="prov"><div class="prov-head"><div class="avatar">${esc(ini)}</div><strong>Provider ${i + 1}</strong>${p.from_registry ? '<span class="badge badge-ok">From NPI registry</span>' : ""}<button type="button" class="btn-link prov-remove" data-action="rm-prov" data-i="${i}">Remove</button></div>
       <div class="row"><div class="field"><label for="pn${i}">Full name</label><input id="pn${i}" type="text" data-bind="providers.list.${i}.name" data-rerender-avatar="${i}" value="${esc(p.name || "")}" placeholder="First and last name"></div>
-      <div class="field"><label for="pc${i}">Credential</label><select id="pc${i}" data-bind="providers.list.${i}.credential"><option value="">Choose…</option>${CREDENTIALS.map((c) => `<option${p.credential === c ? " selected" : ""}>${c}</option>`).join("")}<option value="unsure"${p.credential === "unsure" ? " selected" : ""}>Not sure</option></select></div></div>
+      <div class="field"><label for="pc${i}">Credential</label><select id="pc${i}" data-bind="providers.list.${i}.credential"><option value="">Choose…</option>${(p.credential && p.credential !== "unsure" && !CREDENTIALS.includes(p.credential) ? [p.credential] : []).concat(CREDENTIALS).map((c) => `<option${p.credential === c ? " selected" : ""}>${esc(c)}</option>`).join("")}<option value="unsure"${p.credential === "unsure" ? " selected" : ""}>Not sure</option></select></div></div>
       <div class="row"><div class="field"><label for="pi${i}">Individual NPI <span class="muted">(optional)</span></label><input id="pi${i}" type="text" inputmode="numeric" maxlength="10" data-npi="providers.list.${i}.npi" value="${esc(p.npi || "")}" placeholder="10 digits"><div class="msg"></div></div>
       <div class="field"><label>New to insurance credentialing?</label><div class="seg">${[["yes", "Yes"], ["no", "No"], ["unsure", "Not sure"]].map(([v, l]) => `<button type="button" data-seg="providers.list.${i}.new_to_credentialing" data-value="${v}" aria-pressed="${p.new_to_credentialing === v}">${l}</button>`).join("")}</div></div></div></div>`;
   }
 
   R.rcm = () => {
     const eu = isUnsure("rcm.ehr");
-    return `${head("💳", "Step 6", "How do you handle billing today?", "Rough answers are perfect. This helps us size the right billing (RCM) plan.")}
+    return `${head("💳", "Step 7", "How do you handle billing today?", "Rough answers are perfect. This helps us size the right billing (RCM) plan.")}
       <h2>What can we help with?</h2>
       ${choices("rcm.services", [{ v: "credentialing", label: "Credentialing", ico: "📝", sub: "Getting in network with payers" }, { v: "rcm", label: "Billing / RCM", ico: "💵", sub: "Claims, payments, follow-up" }, { v: "consulting", label: "Consulting", ico: "🧭", sub: "Setup, strategy, compliance" }], { multi: true })}
       <h2>Current billing setup</h2>
@@ -264,7 +397,7 @@
       ${choices("rcm.go_live", [["asap", "ASAP"], ["1-3m", "1–3 months"], ["3-6m", "3–6 months"], ["6m+", "6+ months"]].map(([v, l]) => ({ v, label: l })), { chips: true, unsureLabel: "🤔 Not sure" })}`;
   };
 
-  R.contact = () => `${head("📬", "Step 7", "How should we follow up?", "So we can send your quote to the right person.")}
+  R.contact = () => `${head("📬", "Step 8", "How should we follow up?", "So we can send your quote to the right person.")}
       <div class="row">${field("contact.name", "Your name", text("contact.name", { auto: "name" }), { unsure: false })}${field("contact.title", "Role / title", text("contact.title", { ph: "e.g. Owner, Practice manager", auto: "organization-title" }), { unsure: false })}</div>
       <div class="row">${field("contact.email", "Email", text("contact.email", { type: "email", auto: "email", mode: "email" }), { unsure: false })}${field("contact.phone", "Phone", text("contact.phone", { type: "tel", auto: "tel", mode: "tel" }), { unsure: false })}</div>
       <h2>Preferred way to connect</h2>
@@ -296,13 +429,15 @@
     const sel = Object.values(A.payers?.selected || {});
     const addr = pr.address || {};
     const secs = [
-      ["states", "🗺️ Where you practice", [["States", (A.states || []).map((s) => LISTS.states[s]), A.states_unsure ? "states" : null]]],
+      ["welcome", "👋 You", [["Name", c.name], ["Email", c.email]]],
+      ["clinic", "🏥 Clinic & states", [["Clinic", pr.clinic_name, "practice.clinic_name"], ["States", (A.states || []).map((s) => LISTS.states[s]), A.states_unsure ? "states" : null]]],
+      ["lookup", "🔎 NPI registry matches", [["Clinic", (A.lookup?.selected || []).filter((r) => r.type === "organization").map((r) => `${r.name} (NPI ${r.npi})`)], ["Providers", (A.lookup?.selected || []).filter((r) => r.type === "individual").map((r) => `${r.name} (NPI ${r.npi})`)]]],
       ["payers", "🏥 Insurance plans", [["Selected", sel.map((p) => `${p.name}${p.in_network === "yes" ? " (in network)" : ""}`)], ["Other", A.payers?.other]]],
-      ["practice", "🏢 Practice", [["Legal name", pr.legal_name, "practice.legal_name"], ["DBA", pr.dba, "practice.dba"], ["Tax ID", pendingTin ? "Saving…" : pr.tin_masked, "practice.tin"], ["Group NPI", pr.group_npi, "practice.group_npi"], ["Address", [addr.street, addr.city, addr.state, addr.zip].filter(Boolean).join(", "), "practice.address"]]],
+      ["practice", "🏢 Practice", [["Legal name", pr.legal_name, "practice.legal_name"], ["DBA", pr.dba, "practice.dba"], ["Tax ID", pendingTin ? "Saving…" : pr.tin_masked, "practice.tin"], ["Group NPI", pr.group_npi, "practice.group_npi"], ["Phone", pr.phone, "practice.phone"], ["Address", [addr.street, addr.city, addr.state, addr.zip].filter(Boolean).join(", "), "practice.address"]]],
       ["specialty", "🩺 Specialty & setup", [["Specialty", sp.specialties, "specialty.specialties"], ["Stage", sp.practice_stage], ["Size", sp.practice_size], ["Setting", sp.care_setting]]],
       ["providers", "🧑‍⚕️ Providers", [["How many", pv.count, "providers.count"], ["Names", (pv.list || []).filter((p) => p.name).map((p) => `${p.name}${p.credential && p.credential !== "unsure" ? ", " + p.credential : ""}`)]]],
       ["rcm", "💳 Billing & timing", [["Services", rc.services], ["Billing today", rc.billing_setup], ["EHR / PM", rc.ehr, "rcm.ehr"], ["Claims / month", rc.monthly_claims], ["Collections / month", rc.monthly_collections], ["Start", rc.go_live]]],
-      ["contact", "📬 Contact", [["Name", c.name], ["Email", c.email], ["Phone", c.phone], ["Preferred", c.method], ["Best time", c.best_time]]],
+      ["contact", "📬 Contact", [["Phone", c.phone], ["Preferred", c.method], ["Best time", c.best_time]]],
     ];
     let skipped = 0;
     const html = secs.map(([id, title, rows]) => { const r = kv(rows); skipped += r.skipped; return `<div class="review-sec"><div class="head"><h3>${title}</h3><button type="button" class="btn btn-ghost btn-small" data-goto="${id}">Edit</button></div>${r.html}</div>`; }).join("");
@@ -345,7 +480,7 @@
     const i = STEPS.findIndex((s) => "#" + s.id === location.hash);
     if (i >= 0 && i !== step && STEPS[i].id !== "done") go(i, { push: false });
   });
-  const cheers = { 2: "Nice! The hard part's done 🙌", 4: "Halfway there!", 6: "Almost there ✨" };
+  const cheers = { 3: "Nice! The hard part's done 🙌", 5: "Halfway there!", 7: "Almost there ✨" };
   $("#next").addEventListener("click", () => { if (cheers[step + 1]) toast(cheers[step + 1]); go(step + 1); });
   $("#back").addEventListener("click", () => go(step - 1));
   $("#skip").addEventListener("click", () => { A.skipped = A.skipped || {}; A.skipped[STEPS[step].id] = true; toast("Skipped for now, no problem."); go(step + 1); });
@@ -371,6 +506,8 @@
   card.addEventListener("change", (e) => { const t = e.target; if (t.matches("select[data-bind]")) { set(t.dataset.bind, t.value); queueSave(); } if (t.matches("[data-payer]")) togglePayer(t.dataset.payer, t.checked); });
   card.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && e.target.id === "spec-q") { e.preventDefault(); addSpec(e.target.value); }
+    if (e.key === "Enter" && e.target.id === "lk-org") { e.preventDefault(); runLookup("organization"); }
+    if (e.key === "Enter" && (e.target.id === "lk-first" || e.target.id === "lk-last")) { e.preventDefault(); runLookup("individual"); }
   });
 
   card.addEventListener("click", (e) => {
@@ -389,12 +526,13 @@
     if (d.seg) { const cur = get(d.seg); set(d.seg, cur === d.value ? "" : d.value); queueSave(); return refreshPressed(`[data-seg="${d.seg}"]`, (x) => get(d.seg) === x.dataset.value); }
     if (d.state) return toggleState(d.state, b);
     if (d.innet) { const s = selectedPayers()[d.innet]; s.in_network = s.in_network === d.value ? "" : d.value; queueSave(); return refreshPressed(`[data-innet="${CSS.escape(d.innet)}"]`, (x) => s.in_network === x.dataset.value); }
+    if (d.npisel) return toggleRecord(d.npisel, d.kind);
     if (d.goto) return go(STEPS.findIndex((s) => s.id === d.goto));
     if (d.addpayer !== undefined) return addSearchedPayer(+d.addpayer);
     if (d.addspec !== undefined) return addSpec(d.addspec);
     if (d.setehr !== undefined) { set("rcm.ehr", d.setehr); queueSave(); const i = $("[data-ehr]"); i.value = d.setehr; $("#ehr-suggest").classList.add("hidden"); return; }
     switch (d.action) {
-      case "start": return go(INV.status === "in_progress" && INV.current_step > 0 && INV.current_step < STEPS.length - 2 ? INV.current_step : 1);
+      case "start": A.prefill = A.prefill || {}; ["contact.name", "contact.email"].forEach((k) => { if (get(k)) A.prefill[k] = "you"; else delete A.prefill[k]; }); return go(INV.status === "in_progress" && INV.current_step > 0 && INV.current_step < STEPS.length - 2 ? INV.current_step : 1);
       case "restart": return go(1);
       case "states-unsure": A.states_unsure = !A.states_unsure; queueSave(); b.setAttribute("aria-pressed", A.states_unsure); return;
       case "payers-unsure": A.payers = A.payers || {}; A.payers.unsure = !A.payers.unsure; queueSave(); b.setAttribute("aria-pressed", A.payers.unsure); return;
@@ -406,6 +544,10 @@
       case "add-prov": { const pv = ensureProviders(); pv.list.push({}); if ((pv.count || 0) < pv.list.length) pv.count = pv.list.length; queueSave(); render(false); $$("#prov-list .prov").pop().querySelector("input").focus(); return; }
       case "rm-prov": { const pv = ensureProviders(); pv.list.splice(+d.i, 1); queueSave(); render(false); return; }
       case "submit": return submit(b);
+      case "lk-search": return runLookup(d.kind);
+      case "lk-allstates": return runLookup(d.kind, true);
+      case "lk-none": { A.lookup = A.lookup || {}; A.lookup["none_" + d.kind] = !A.lookup["none_" + d.kind]; queueSave(); b.setAttribute("aria-pressed", A.lookup["none_" + d.kind]); if (A.lookup["none_" + d.kind]) toast("No worries, we'll fill these in together."); return; }
+      case "edit-prefill": expanded[d.path] = true; render(false); $(`[data-field="${d.path}"] input, [data-field="${d.path}"] textarea`)?.focus(); return;
       case "edit": return go(1);
     }
   });
@@ -527,6 +669,11 @@
     try {
       const [inv, lists] = await Promise.all([api("GET", ""), fetch("/api/lists").then((r) => r.json())]);
       INV = inv; LISTS = lists; A = inv.answers || {};
+      A.contact = A.contact || {};
+      if (!A.contact.name && inv.prospect_name) A.contact.name = inv.prospect_name;
+      if (!A.contact.email && inv.prospect_email) A.contact.email = inv.prospect_email;
+      A.practice = A.practice || {};
+      if (!A.practice.clinic_name && inv.practice_name) A.practice.clinic_name = inv.practice_name;
       setSave("saved", inv.status === "not_started" ? "Your answers save automatically" : "Saved");
       const fromHash = STEPS.findIndex((s) => "#" + s.id === location.hash);
       if (inv.status === "submitted") step = STEPS.length - 1;

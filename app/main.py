@@ -24,7 +24,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import db
+from . import db, nppes
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = os.path.join(HERE, "static")
@@ -64,7 +64,7 @@ def _startup() -> None:
 
 # --------------------------------------------------------------------------- security middleware
 _buckets: dict[tuple[str, str], deque] = defaultdict(deque)
-LIMITS = {"login": (10, 900), "miss": (30, 600), "wizard": (240, 60), "rep": (600, 60), "page": (120, 60)}
+LIMITS = {"login": (10, 900), "miss": (30, 600), "wizard": (240, 60), "lookup": (40, 60), "rep": (600, 60), "page": (120, 60)}
 
 
 def client_ip(request: Request) -> str:
@@ -189,7 +189,7 @@ def clean(value: Any, depth: int = 0) -> Any:
     return None
 
 
-ALLOWED_TOP = {"skipped", "states", "states_unsure", "payers", "practice", "specialty", "providers", "rcm", "contact"}
+ALLOWED_TOP = {"skipped", "lookup", "prefill", "states", "states_unsure", "payers", "practice", "specialty", "providers", "rcm", "contact"}
 
 
 def validate_answers(ans: dict) -> tuple[dict, list[str]]:
@@ -220,6 +220,14 @@ def validate_answers(ans: dict) -> tuple[dict, list[str]]:
                          "npi": npi, "new_to_credentialing": p.get("new_to_credentialing")})
         provs["list"] = rows
         ans["providers"] = provs
+    lk = ans.get("lookup") or {}
+    if isinstance(lk, dict):
+        recs = []
+        for r in (lk.get("selected") or [])[:60]:
+            if isinstance(r, dict) and npi_valid(str(r.get("npi") or "")) and r.get("type") in ("individual", "organization"):
+                recs.append(r)
+        lk["selected"] = recs
+        ans["lookup"] = lk
     contact = ans.get("contact") or {}
     if isinstance(contact, dict) and contact.get("email") and not EMAIL_RE.match(contact["email"]):
         warnings.append("That email address doesn't look complete, so it wasn't saved.")
@@ -306,6 +314,8 @@ def public_invite(row: dict) -> dict:
     practice["tin_masked"] = mask_tin(tin)
     return {
         "first_name": first_name(row["prospect_name"]),
+        "prospect_name": row["prospect_name"] or "",
+        "prospect_email": row["prospect_email"] or "",
         "practice_name": row["practice_name"] or "",
         "rep_name": row["rep_name"] or "your CHS contact",
         "rep_email": row["rep_email"] or "",
@@ -433,6 +443,22 @@ def payer_search(request: Request, token: str, q: str = "", states: str = ""):
             if len(res) >= 15:
                 break
     return {"results": res}
+
+
+@app.get("/api/p/{token}/npi-search")
+async def npi_search(request: Request, token: str, kind: str = "individual", first: str = "", last: str = "",
+                     org: str = "", states: str = ""):
+    limit(request, "wizard")
+    limit(request, "lookup")
+    invite_by_token(request, token)
+    if kind not in ("individual", "organization"):
+        raise HTTPException(400, "Unknown search type.")
+    wanted = [s for s in states.upper().split(",") if s in STATE_NAMES]
+    try:
+        results = await nppes.search(kind, first=first[:60], last=last[:60], org=org[:120], states=wanted)
+    except Exception:
+        raise HTTPException(502, "The NPI registry didn't respond. Please try again in a moment, or skip this step.")
+    return {"results": results, "source": "CMS NPPES NPI Registry"}
 
 
 @app.get("/api/lists")
@@ -629,8 +655,12 @@ def flatten(row: dict, request: Request) -> list[tuple[str, str, str]]:
         add("payers", p.get("name") or key, f"group={p.get('group','')}; stedi_id={p.get('stedi_payer_id') or ''}; in_network={p.get('in_network') or 'unanswered'}")
     add("payers", "other_payers", pay.get("other"))
     add("payers", "unsure", pay.get("unsure"))
+    for r in (a.get("lookup") or {}).get("selected") or []:
+        ad = r.get("address") or {}
+        add("npi_registry", f"{r.get('type')} {r.get('npi')}", f"{r.get('name')} | {r.get('taxonomy') or ''} | {', '.join(x for x in [ad.get('street'), ad.get('city'), ad.get('state'), ad.get('zip')] if x)} | {r.get('phone') or ''}")
     pr = a.get("practice") or {}
-    for f in ("legal_name", "dba", "group_npi"):
+    add("practice", "clinic_name", pr.get("clinic_name"))
+    for f in ("legal_name", "dba", "group_npi", "phone"):
         add("practice", f, pr.get(f))
     add("practice", "tin", v["tin_masked"] or "")
     addr = pr.get("address") or {}

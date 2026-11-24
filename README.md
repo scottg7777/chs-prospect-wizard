@@ -11,16 +11,18 @@ being a burden. **Every question is optional**, and each one has a clear "Not su
 
 | # | Step | What it collects |
 |---|------|------------------|
-| 0 | Welcome | Rep name, practice, privacy note, time estimate |
-| 1 | Where you practice | One or more states (filterable chips) |
-| 2 | Insurance payers | Payers for the chosen states, grouped: Government (Medicare Part B MAC, state Medicaid, TRICARE), Medicaid managed care (verified states only), Commercial (state BCBS, Kaiser where it operates, Aetna, Cigna, UHC, Humana, Oscar where listed), Behavioral health. "Already in network? Yes / No / Not sure" for each selected payer, a search across the whole Stedi network, and free-text "other plans" |
-| 3 | Practice details | Legal name, DBA, TIN/EIN (masked input, format check, **encrypted at rest**), group NPI (Luhn check), address |
-| 4 | Specialty & setup | Specialty type-ahead (free text allowed), new vs. established, solo vs. group, in person / telehealth / both |
-| 5 | Providers | Count stepper, then a row per provider: name, credential, optional NPI (Luhn check), new to credentialing? |
-| 6 | Billing & timing | Services wanted, current billing setup, EHR/PM (type-ahead), monthly claims and collections ranges, go-live timing |
-| 7 | Contact | Name, title, email, phone, preferred method, best time, notes |
-| 8 | Review | Summary with an Edit button per section and a count of skipped items, then Submit |
-| 9 | Thank you | Confetti 🎉 and next steps. The prospect can reopen and edit until the link expires |
+| 0 | Welcome | Prospect name and email (prefilled from the invite, editable) and a privacy note |
+| 1 | Your clinic | Clinic/practice name and every state where they practice (multi-select) |
+| 2 | NPI registry lookup | Server-side search of the public **CMS NPPES** registry: NPI-2 by clinic name + state, NPI-1 by provider first/last name + state (searched one at a time, repeatable). Results appear as cards showing name, NPI, address, specialty (taxonomy) and phone. The prospect taps the ones that belong to them, or picks "None of these". Selected records prefill group NPI, legal name/DBA, address, phone, specialty, and provider names/credentials/NPIs. Every prefilled field stays editable. TINs aren't public, so the TIN stays a manual, skippable field |
+| 3 | Insurance payers | Payers for the chosen states (unchanged) |
+| 4 | Practice details | Prefilled fields collapse into a "From NPI registry · Edit" summary. Only the missing fields (usually just the TIN) are asked |
+| 5 | Specialty & setup | Specialty (prefilled from taxonomy), new vs. established, solo vs. group, in person / telehealth / both |
+| 6 | Providers | Registry-selected providers come prefilled and badged. Edit them or add more |
+| 7 | Billing & timing | Services, billing setup, EHR/PM, monthly claims and collections ranges, go-live timing |
+| 8 | Contact | Title, phone, preferred method, best time, notes. Name and email from step 0 are collapsed |
+| 9 | Review → Thank you | Summary with an Edit button per section (including the NPI matches), then Submit and confetti 🎉 |
+
+The selected NPPES records are stored with the submission (`answers.lookup.selected`). They show in the rep detail view and are included in the CSV/JSON exports.
 
 Answers autosave to the server (debounced, and again when the tab is hidden). Reopening the same link resumes
 where the prospect left off. Each step also has a "Skip for now" button.

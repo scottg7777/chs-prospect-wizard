@@ -57,3 +57,36 @@ def test_login_rate_limit():
     m._buckets.clear()
     codes = [c.post("/api/rep/login", json={"password": "bad"}).status_code for _ in range(12)]
     assert codes.count(429) >= 1
+
+
+def test_npi_search_and_lookup_storage(monkeypatch):
+    c = client()
+    m._buckets.clear()
+    c.post("/api/rep/login", json={"password": "test-pass-123"})
+    inv = c.post("/api/rep/invites", json={"prospect_name": "Fake Person", "rep_name": "Rep"}).json()
+    token = inv["link"].rsplit("/", 1)[1]
+    seen = {}
+
+    async def fake_search(kind, **kw):
+        seen.update(kind=kind, **kw)
+        return [{"npi": "1234567893", "type": kind, "name": "Fake Clinic", "address": {"state": "AZ"}}]
+    monkeypatch.setattr(m.nppes, "search", fake_search)
+    r = c.get(f"/api/p/{token}/npi-search?kind=organization&org=Fake%20Clinic&states=AZ,ZZ").json()
+    assert r["results"][0]["npi"] == "1234567893" and seen["states"] == ["AZ"]
+    assert c.get(f"/api/p/{token}/npi-search?kind=bogus").status_code == 400
+    ans = {"lookup": {"selected": [{"npi": "1234567893", "type": "organization", "name": "Fake Clinic"},
+                                   {"npi": "1234567890", "type": "individual", "name": "Bad Luhn"}]}}
+    s = c.put(f"/api/p/{token}/answers", json={"answers": ans, "step": 2}).json()
+    assert [x["npi"] for x in s["answers"]["lookup"]["selected"]] == ["1234567893"]
+    detail = c.get(f"/api/rep/invites/{s and inv['id']}").json()
+    assert detail["answers"]["lookup"]["selected"][0]["name"] == "Fake Clinic"
+    assert "npi_registry" in c.get(f"/api/rep/invites/{inv['id']}/export.csv").text
+
+
+def test_nppes_parse():
+    from app import nppes
+    rec = nppes.parse({"number": 1902877855, "enumeration_type": "NPI-2",
+                       "basic": {"organization_name": "MAYO CLINIC ARIZONA", "status": "A"},
+                       "addresses": [{"address_purpose": "LOCATION", "address_1": "5777 E MAYO BLVD", "city": "PHOENIX", "state": "AZ", "postal_code": "850544502", "telephone_number": "480-301-0881"}],
+                       "taxonomies": [{"desc": "Clinic", "code": "261Q00000X", "primary": True}]})
+    assert rec["name"] == "Mayo Clinic Arizona" and rec["address"]["zip"] == "85054-4502" and rec["phone"] == "(480) 301-0881"

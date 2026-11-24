@@ -124,3 +124,15 @@ table.inv th{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:
 .test-flag{background:#ede9fe;color:#5b21b6;border-radius:6px;font-size:11px;font-weight:700;padding:2px 6px;margin-left:6px}
 .toolbar .spacer{flex:1}.grow{margin:0}.tablewrap{overflow-x:auto}
 main.wide{max-width:1180px}.topbar-inner.wide{max-width:1180px}
+
+.npi-card{border:1.5px solid var(--line);border-radius:14px;padding:14px;margin:10px 0;background:#fff;transition:all .15s}
+.npi-card.on{border-color:var(--teal);background:var(--teal-2);box-shadow:inset 0 0 0 1px var(--teal)}
+.npi-top{display:flex;align-items:flex-start;gap:10px;justify-content:space-between;margin-bottom:8px}
+.npi-top .chip{flex:none;padding:9px 14px;min-height:40px;font-size:14px}
+.npi-kv{grid-template-columns:110px 1fr;font-size:14px}
+.lk-search{display:flex;gap:8px;margin:6px 0 10px}
+.lk-search input{flex:1;min-width:0}
+.badge-ok{background:#e7f6ee;color:#1a7f4b}
+.field.prefilled{background:#f6fbf9;border:1px solid #d5ece1;border-radius:12px;padding:10px 12px}
+.prefill-val{font-size:16px}
+@media (max-width:560px){.lk-search{flex-wrap:wrap}.lk-search .btn{width:100%}.npi-top{flex-direction:column}.npi-kv{grid-template-columns:1fr}}
