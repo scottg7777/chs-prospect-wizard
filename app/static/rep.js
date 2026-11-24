@@ -13,7 +13,7 @@
     return d;
   }
   function showLogin() { $("#login").classList.remove("hidden"); $("#dash").classList.add("hidden"); $("#logout").classList.add("hidden"); }
-  function showDash() { $("#login").classList.add("hidden"); $("#dash").classList.remove("hidden"); $("#logout").classList.remove("hidden"); const n = localStorage.getItem("chs_rep_name"); if (n && !$("#i-rn").value) $("#i-rn").value = n; const e = localStorage.getItem("chs_rep_email"); if (e && !$("#i-re").value) $("#i-re").value = e; load(); }
+  let showDash = function () { $("#login").classList.add("hidden"); $("#dash").classList.remove("hidden"); $("#logout").classList.remove("hidden"); const n = localStorage.getItem("chs_rep_name"); if (n && !$("#i-rn").value) $("#i-rn").value = n; const e = localStorage.getItem("chs_rep_email"); if (e && !$("#i-re").value) $("#i-re").value = e; load(); };
   $("#login-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     try { await api("POST", "/api/rep/login", { password: $("#pw").value }); $("#pw").value = ""; showDash(); }
@@ -99,5 +99,13 @@
     if (kind === "revoke" && !confirm("Revoke this link? The prospect won't be able to open it.")) return;
     await api("POST", `/api/rep/invites/${id}/${kind}`); await view(id); load();
   }
-  api("GET", "/api/rep/me").then(showDash, showLogin);
+  function storageBanner(me) {
+    if (!me || !me.storage_ephemeral || $("#storage-warn")) return;
+    const d = document.createElement("div"); d.id = "storage-warn"; d.className = "warnings";
+    d.textContent = "Heads up: this server is using temporary storage (no DATABASE_URL set). Invites and answers will be lost when it restarts. Connect the Render Postgres database before sending real links.";
+    $("#dash").prepend(d);
+  }
+  const _show = showDash;
+  showDash = function () { _show(); api("GET", "/api/rep/me").then(storageBanner, () => {}); };
+  api("GET", "/api/rep/me").then(() => showDash(), showLogin);
 })();

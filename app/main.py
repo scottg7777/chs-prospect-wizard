@@ -486,7 +486,8 @@ def rep_logout():
 @app.get("/api/rep/me")
 def rep_me(request: Request):
     require_rep(request)
-    return {"ok": True, "link_days": LINK_DAYS}
+    ephemeral = not db.IS_PG and bool(os.environ.get("RENDER"))
+    return {"ok": True, "link_days": LINK_DAYS, "storage": "postgres" if db.IS_PG else "sqlite", "storage_ephemeral": ephemeral}
 
 
 # --------------------------------------------------------------------------- rep invites
